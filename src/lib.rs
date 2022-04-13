@@ -117,62 +117,60 @@ fn new_inner_node<const M: usize>() -> NodePtr<M> {
 /// Split a node into two, inserting the right-most node that didn't previously fit.
 /// Returns the newly constructed triple `(left node, key, right node)`.
 /// Reuses the provided `node` as the new left node to keep the previous leaf's `next_in_layer` pointer intact.
-/// `node_to_insert_right` must be `None` if and if only `node.is_leaf()` is true.
+/// `item_to_insert_right` must be `None` if and if only if the node is a leaf.
 ///
 /// SAFETY: The provided child nodes must be valid.
 unsafe fn split_insert<const M: usize>(
-    mut node: NodePtr<M>,
+    mut node_ptr: NodePtr<M>,
     item_to_insert_right: Option<NodePtr<M>>,
 ) -> (NodePtr<M>, Key, NodePtr<M>) {
-    // Helper function to move the children into a new sibling node.
-    // This is a generic function to support both inner and leaf nodes.
-    fn move_children<T, const M: usize>(
-        children: &mut [Option<T>; M],
-        new_children: &mut [Option<T>; M],
+    // Helper function to move the upper half of an array into a new array.
+    fn move_half<T, const M: usize>(
+        source: &mut [Option<T>; M],
+        dest: &mut [Option<T>; M],
     ) -> usize {
-        let mut num_children = 0;
+        let mut num_nonempty = 0;
         for i in 0..M / 2 {
-            if let Some(child) = children[i + (M + 1) / 2].take() {
-                new_children[i] = Some(child);
-                num_children += 1;
+            if let Some(x) = source[i + (M + 1) / 2].take() {
+                dest[i] = Some(x);
+                num_nonempty += 1;
             }
         }
-        num_children
+        num_nonempty
     }
 
+    let node = node_ptr.as_mut();
     // Create a new sibling and move half of the children to it.
-    let (pulled_up_key, mut new_right_ptr) = match &mut node.as_mut().children {
+    let (pulled_up_key, mut new_right_ptr) = match &mut node.children {
         Children::Nodes(nodes) => {
             // node is an inner node.
             let mut new_right_ptr = new_inner_node();
             let new_children = new_right_ptr.as_mut().children_nodes_mut().unwrap();
-            let num_children = move_children(nodes, new_children);
+            let num_children = move_half(nodes, new_children);
             new_children[num_children] = item_to_insert_right;
             (
                 // Take the key out of the inner node. Only leaf nodes get copies of keys.
-                node.as_mut().keys[(M - 1) / 2].take().unwrap(),
+                node.keys[(M - 1) / 2].take().unwrap(),
                 new_right_ptr,
             )
         }
         Children::Data(data) => {
             // node is a leaf node.
             let mut new_right_ptr = new_leaf_node();
-            move_children(data, new_right_ptr.as_mut().children_data_mut().unwrap());
+            move_half(data, new_right_ptr.as_mut().children_data_mut().unwrap());
             // Copy the key out of the leaf to ensure all keys are present in the leaves.
-            (node.as_mut().keys[(M - 1) / 2].unwrap(), new_right_ptr)
+            (node.keys[(M - 1) / 2].unwrap(), new_right_ptr)
         }
     };
 
     // Move half of the keys to the new node.
-    for i in 0..M / 2 {
-        new_right_ptr.as_mut().keys[i] = node.as_mut().keys[i + (M + 1) / 2].take();
-    }
+    move_half(&mut node.keys, &mut new_right_ptr.as_mut().keys);
 
     // Fix the intra-layer pointers.
-    new_right_ptr.as_mut().next_in_layer = node.as_ref().next_in_layer;
-    node.as_mut().next_in_layer = Some(new_right_ptr);
+    new_right_ptr.as_mut().next_in_layer = node.next_in_layer;
+    node.next_in_layer = Some(new_right_ptr);
 
-    (node, pulled_up_key, new_right_ptr)
+    (node_ptr, pulled_up_key, new_right_ptr)
 }
 
 impl<const M: usize> Node<M> {
