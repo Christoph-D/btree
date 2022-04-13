@@ -1,6 +1,9 @@
 use std::fmt;
 use std::ptr::NonNull;
 
+#[cfg(test)]
+mod test;
+
 /// A B-tree implementation.
 #[derive(Debug)]
 pub struct BTree<const M: usize> {
@@ -18,11 +21,14 @@ struct Node<const M: usize> {
     /// contain `M` keys and `M` children, see [InsertResult::Overfull].
     keys: [Option<Key>; M],
     /// The children below this node. Invariants:
-    /// * All keys in `children[i]` are smaller than `keys[i]`.
+    /// * All keys in `children[i]` are smaller or equal to `keys[i]`.
     /// * `keys[i]` is smaller than all keys in `children[i+1]`.
+    /// * All keys are copied into the leaf nodes.
+    ///   That is, iterating over the leaf nodes yields all keys.
     children: [Option<ChildNode<M>>; M],
     /// The next node in this layer of the tree.
     /// This is `None` for the right-most node in the layer.
+    /// Useful for iterating over the leaf nodes.
     next_in_layer: Option<ChildNode<M>>,
 }
 
@@ -87,6 +93,7 @@ fn new_child_node<const M: usize>() -> ChildNode<M> {
 /// Split a node into two, inserting the right-most node that didn't previously fit.
 /// Returns the newly constructed triple `(left node, key, right node)`.
 /// Reuses the provided `node` as the new left node to keep the previous leaf's `next_in_layer` pointer intact.
+/// `node_to_insert_right` must be `None` if and if only `node.is_leaf()` is true.
 ///
 /// SAFETY: The provided child nodes must be valid.
 unsafe fn split_insert<const M: usize>(
@@ -99,19 +106,25 @@ unsafe fn split_insert<const M: usize>(
     let old_node = node.as_mut();
 
     let mut num_children = 0;
-    for i in 0..(M - 1) / 2 {
-        if let Some(child) = old_node.children[i + 1 + M / 2].take() {
+    for i in 0..M / 2 {
+        if let Some(child) = old_node.children[i + (M + 1) / 2].take() {
             new_right.children[i] = Some(child);
             num_children += 1;
         }
-        new_right.keys[i] = old_node.keys[i + 1 + M / 2].take();
+        new_right.keys[i] = old_node.keys[i + (M + 1) / 2].take();
     }
     new_right.children[num_children] = node_to_insert_right;
 
     new_right.next_in_layer = old_node.next_in_layer;
     old_node.next_in_layer = Some(new_right_ptr);
 
-    (node, old_node.keys[M / 2].unwrap(), new_right_ptr)
+    let pulled_up_key = if old_node.is_leaf() {
+        // Leave a copy of the key in the leaf to ensure all keys are in the leaves.
+        old_node.keys[(M - 1) / 2].unwrap()
+    } else {
+        old_node.keys[(M - 1) / 2].take().unwrap()
+    };
+    (node, pulled_up_key, new_right_ptr)
 }
 
 impl<const M: usize> Node<M> {
@@ -242,8 +255,10 @@ pub struct IntoIter<const M: usize> {
     key_index: usize,
 }
 
-impl<const M: usize> BTree<M> {
-    pub fn into_iter(self) -> IntoIter<M> {
+impl<const M: usize> std::iter::IntoIterator for BTree<M> {
+    type Item = Key;
+    type IntoIter = IntoIter<M>;
+    fn into_iter(self) -> IntoIter<M> {
         let mut node = self.root;
         // SAFETY: The root is a valid node. Children are always valid nodes.
         while let Some(child) = unsafe { node.as_ref().children[0] } {
@@ -294,6 +309,12 @@ impl<const M: usize> Drop for Node<M> {
     }
 }
 
+impl<const M: usize> Default for BTree<M> {
+    fn default() -> Self {
+        BTree::new()
+    }
+}
+
 impl<const M: usize> BTree<M> {
     /// Returns a new empty BTree.
     pub fn new() -> BTree<M> {
@@ -334,54 +355,5 @@ impl<const M: usize> BTree<M> {
         r.children[0] = Some(new_left_child);
         r.keys[0] = Some(pulled_up_key);
         r.children[1] = Some(new_right_child);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{BTree, Key};
-    use rand::{prelude::SliceRandom, thread_rng};
-
-    #[test]
-    fn test_simple() {
-        let mut tree = BTree::<3>::new();
-        tree.insert(1);
-        tree.insert(2);
-        tree.insert(3);
-        let r = tree.into_iter().collect::<Vec<Key>>();
-        assert_eq!(r, vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn test_insert() {
-        let mut tree = BTree::<3>::new();
-        let mut vec: Vec<u32> = (0..100).collect();
-        vec.shuffle(&mut thread_rng());
-        for i in vec {
-            tree.insert(i);
-        }
-        for i in 0..100 {
-            assert!(tree.lookup(&i), "Not found: {}", i);
-        }
-        for i in 100..110 {
-            assert!(!tree.lookup(&i), "Found: {}", i);
-        }
-        let r = tree.into_iter().collect::<Vec<Key>>();
-        assert_eq!(r, (0..100).collect::<Vec<Key>>());
-    }
-
-    #[test]
-    fn test_big() {
-        let mut tree = BTree::<20>::new();
-        let mut vec: Vec<u32> = (0..200).collect();
-        vec.shuffle(&mut thread_rng());
-        for i in vec {
-            tree.insert(i);
-        }
-        for i in 0..200 {
-            assert!(tree.lookup(&i), "Not found: {}", i);
-        }
-        let r = tree.into_iter().collect::<Vec<Key>>();
-        assert_eq!(r, (0..200).collect::<Vec<Key>>());
     }
 }
