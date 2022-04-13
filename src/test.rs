@@ -1,5 +1,6 @@
 use super::{split_insert, BTree, Key, Node};
-use rand::{prelude::SliceRandom, thread_rng};
+use rand::rngs::StdRng;
+use rand::{prelude::SliceRandom, SeedableRng};
 use std::ptr::NonNull;
 
 #[test]
@@ -8,7 +9,7 @@ fn test_split_insert_leaf_odd() {
         let dummy_ptr = Some(NonNull::dangling());
         let node = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<5> {
             keys: [Some(0), Some(1), Some(2), Some(3), Some(4)],
-            children: [None; 5],
+            children: [None, None, None, None, None],
             next_in_layer: dummy_ptr,
         })));
         let (left, key, right) = split_insert(node, None);
@@ -37,7 +38,7 @@ fn test_split_insert_leaf_even() {
         let dummy_ptr = Some(NonNull::dangling());
         let node = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<4> {
             keys: [Some(0), Some(1), Some(2), Some(3)],
-            children: [None; 4],
+            children: [None, None, None, None],
             next_in_layer: dummy_ptr,
         })));
         let (left, key, right) = split_insert(node, None);
@@ -62,9 +63,11 @@ fn test_split_insert_leaf_even() {
 #[test]
 fn test_simple() {
     let mut tree = BTree::<3>::new();
-    tree.insert(1);
-    tree.insert(2);
-    tree.insert(3);
+    assert!(tree.root_as_ref().is_leaf());
+    tree.insert(1, 5);
+    tree.insert(2, 6);
+    tree.insert(3, 7);
+    assert!(!tree.root_as_ref().is_leaf());
     assert_eq!(
         format!("{}", tree),
         r#"  [1, 2]
@@ -79,9 +82,9 @@ fn test_simple() {
 fn test_insert() {
     let mut tree = BTree::<3>::new();
     let mut vec: Vec<u32> = (0..100).collect();
-    vec.shuffle(&mut thread_rng());
+    vec.shuffle(&mut StdRng::from_seed([0; 32]));
     for i in vec {
-        tree.insert(i);
+        tree.insert(i, i + 1);
     }
     for i in 0..100 {
         assert!(tree.lookup(&i), "Not found: {}", i);
@@ -97,9 +100,9 @@ fn test_insert() {
 fn test_big() {
     let mut tree = BTree::<10>::new();
     let mut vec: Vec<u32> = (0..200).collect();
-    vec.shuffle(&mut thread_rng());
+    vec.shuffle(&mut StdRng::from_seed([0; 32]));
     for i in vec {
-        tree.insert(i);
+        tree.insert(i, i + 1);
     }
     for i in 0..200 {
         assert!(tree.lookup(&i), "Not found: {}", i);
