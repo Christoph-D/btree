@@ -174,11 +174,11 @@ impl<const M: usize> Node<M> {
     {
         self.children[i]
             .as_ref()
-            // SAFETY: A child is always a valid pointer or `None`.
             .map(|c| c.map_nodeptr(f))
             .flatten()
     }
 
+    /// Returns a pointer to the first child node or `None` if not present.
     fn first_child_node(&self) -> Option<NodePtr<M>> {
         self.map_child_node(0, |c| c)
     }
