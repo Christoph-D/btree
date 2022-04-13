@@ -260,7 +260,7 @@ impl<const M: usize> Node<M> {
     /// Shift all keys and children starting from and including the given index one to the right.
     /// Returns the right-most node that got shifted out.
     ///
-    /// The caller must ensure that the returned `ChildNode` is freed.
+    /// The caller must ensure that the returned node is freed.
     fn shift_right_from<T>(
         keys: &mut [Option<Key>; M],
         children: &mut [Option<T>; M],
@@ -279,7 +279,7 @@ impl<const M: usize> Node<M> {
     /// In this case the node will have `M` keys and `M` children, with an
     /// additional right-most child in the returned enum.
     ///
-    /// The caller must ensure that the returned `ChildNode` in `InsertResult::OverFull` is freed.
+    /// The caller must ensure that the returned node in `InsertResult::Overfull` is freed.
     fn insert(&mut self, key: Key, value: Value) -> InsertResult<M> {
         // Find out where to insert the new key.
         let key_pos = match self.key_position(&key) {
@@ -299,6 +299,8 @@ impl<const M: usize> Node<M> {
             Children::Nodes(nodes) => nodes,
         };
         // Not a leaf. Insert recursively.
+        // SAFETY: A child is always a valid pointer or `None`. In this case it's not `None` because
+        // an inner node always has a child to the right of each key.
         let spillover_content = match unsafe { nodes[key_pos].unwrap().as_mut().insert(key, value) }
         {
             r @ InsertResult::Inserted | r @ InsertResult::AlreadyPresent => return r,
