@@ -15,26 +15,19 @@ type Value = u32;
 type NodePtr<const M: usize> = NonNull<Node<M>>;
 
 #[derive(Debug)]
-enum Child<const M: usize> {
-    Node(NodePtr<M>),
-    Data(Box<Value>),
+enum Children<const M: usize> {
+    Nodes([Option<NodePtr<M>>; M]),
+    Data([Option<Box<Value>>; M]),
 }
 
-impl<const M: usize> Child<M> {
-    fn unwrap_node(&self) -> NodePtr<M> {
-        match self {
-            Child::Node(node) => *node,
-            Child::Data(_) => panic!("Not a node, found data"),
-        }
-    }
-
-    fn map_nodeptr<F, T>(&self, f: F) -> Option<T>
+impl<const M: usize> Children<M> {
+    fn map_nodeptr<F, T>(&self, i: usize, f: F) -> Option<T>
     where
         F: FnOnce(NodePtr<M>) -> T,
     {
         match self {
-            Child::Node(node) => Some(f(*node)),
-            Child::Data(_) => None,
+            Children::Nodes(nodes) => nodes[i].map(f),
+            Children::Data(_) => None,
         }
     }
 }
@@ -51,7 +44,7 @@ struct Node<const M: usize> {
     /// * `keys[i]` is smaller than all keys in `children[i+1]`.
     /// * All keys are copied into the leaf nodes.
     ///   That is, iterating over the leaf nodes yields all keys.
-    children: [Option<Child<M>>; M],
+    children: Children<M>,
     /// The next node in this layer of the tree.
     /// This is `None` for the right-most node in the layer.
     /// Useful for iterating over the leaf nodes.
@@ -107,13 +100,18 @@ enum InsertResult<const M: usize> {
     /// `Overfull` indicates to the caller that the node needs to be split because it is overfull.
     /// An overfull node has `M` keys (one too many) and `M` children, which is one too few for `M` keys.
     /// The right-most child that didn't fit is carried in this enum.
-    Overfull(Option<Child<M>>),
+    Overfull(Option<NodePtr<M>>),
     AlreadyPresent,
 }
 
-fn new_child_node<const M: usize>() -> NodePtr<M> {
+fn new_leaf_node<const M: usize>() -> NodePtr<M> {
     // SAFETY: A pointer from a Box is never null.
-    unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Node::new()))) }
+    unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Node::new_leaf()))) }
+}
+
+fn new_inner_node<const M: usize>() -> NodePtr<M> {
+    // SAFETY: A pointer from a Box is never null.
+    unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Node::new_inner()))) }
 }
 
 /// Split a node into two, inserting the right-most node that didn't previously fit.
@@ -124,80 +122,112 @@ fn new_child_node<const M: usize>() -> NodePtr<M> {
 /// SAFETY: The provided child nodes must be valid.
 unsafe fn split_insert<const M: usize>(
     mut node: NodePtr<M>,
-    node_to_insert_right: Option<Child<M>>,
+    item_to_insert_right: Option<NodePtr<M>>,
 ) -> (NodePtr<M>, Key, NodePtr<M>) {
-    // Split the upper half of the node into a new node.
-    let mut new_right_ptr = new_child_node();
-    let new_right = new_right_ptr.as_mut();
-    let old_node = node.as_mut();
-
-    let mut num_children = 0;
-    for i in 0..M / 2 {
-        if let Some(child) = old_node.children[i + (M + 1) / 2].take() {
-            new_right.children[i] = Some(child);
-            num_children += 1;
+    // Helper function to move the children into a new sibling node.
+    // This is a generic function to support both inner and leaf nodes.
+    fn move_children<T, const M: usize>(
+        children: &mut [Option<T>; M],
+        new_children: &mut [Option<T>; M],
+    ) -> usize {
+        let mut num_children = 0;
+        for i in 0..M / 2 {
+            if let Some(child) = children[i + (M + 1) / 2].take() {
+                new_children[i] = Some(child);
+                num_children += 1;
+            }
         }
-        new_right.keys[i] = old_node.keys[i + (M + 1) / 2].take();
+        num_children
     }
-    new_right.children[num_children] = node_to_insert_right;
 
-    new_right.next_in_layer = old_node.next_in_layer;
-    old_node.next_in_layer = Some(new_right_ptr);
-
-    let pulled_up_key = if old_node.is_leaf() {
-        // Leave a copy of the key in the leaf to ensure all keys are in the leaves.
-        old_node.keys[(M - 1) / 2].unwrap()
-    } else {
-        old_node.keys[(M - 1) / 2].take().unwrap()
+    // Create a new sibling and move half of the children to it.
+    let (pulled_up_key, mut new_right_ptr) = match &mut node.as_mut().children {
+        Children::Nodes(nodes) => {
+            // node is an inner node.
+            let mut new_right_ptr = new_inner_node();
+            let new_children = new_right_ptr.as_mut().children_nodes_mut().unwrap();
+            let num_children = move_children(nodes, new_children);
+            new_children[num_children] = item_to_insert_right;
+            (
+                // Take the key out of the inner node. Only leaf nodes get copies of keys.
+                node.as_mut().keys[(M - 1) / 2].take().unwrap(),
+                new_right_ptr,
+            )
+        }
+        Children::Data(data) => {
+            // node is a leaf node.
+            let mut new_right_ptr = new_leaf_node();
+            move_children(data, new_right_ptr.as_mut().children_data_mut().unwrap());
+            // Copy the key out of the leaf to ensure all keys are present in the leaves.
+            (node.as_mut().keys[(M - 1) / 2].unwrap(), new_right_ptr)
+        }
     };
+
+    // Move half of the keys to the new node.
+    for i in 0..M / 2 {
+        new_right_ptr.as_mut().keys[i] = node.as_mut().keys[i + (M + 1) / 2].take();
+    }
+
+    // Fix the intra-layer pointers.
+    new_right_ptr.as_mut().next_in_layer = node.as_ref().next_in_layer;
+    node.as_mut().next_in_layer = Some(new_right_ptr);
+
     (node, pulled_up_key, new_right_ptr)
 }
 
 impl<const M: usize> Node<M> {
     const NO_KEY: Option<u32> = None;
-    const NO_NODE: Option<Child<M>> = None;
+    const NO_NODE: Option<NodePtr<M>> = None;
+    const NO_DATA: Option<Box<Value>> = None;
 
-    /// Constructs an empty Node with all keys and children set to `None`.
-    fn new() -> Node<M> {
+    /// Constructs an empty leaf Node with all keys and children set to `None`.
+    fn new_leaf() -> Node<M> {
         Node {
             keys: [Self::NO_KEY; M],
-            children: [Self::NO_NODE; M],
+            children: Children::Data([Self::NO_DATA; M]),
             next_in_layer: None,
         }
     }
 
-    /// Applies a function to a child node.
-    /// Returns `None` if there is no child node at the given index.
-    fn map_child_node<F, T>(&self, i: usize, f: F) -> Option<T>
-    where
-        F: FnOnce(NodePtr<M>) -> T,
-    {
-        self.children[i]
-            .as_ref()
-            .map(|c| c.map_nodeptr(f))
-            .flatten()
+    /// Constructs an empty inner Node with all keys and children set to `None`.
+    fn new_inner() -> Node<M> {
+        Node {
+            keys: [Self::NO_KEY; M],
+            children: Children::Nodes([Self::NO_NODE; M]),
+            next_in_layer: None,
+        }
+    }
+
+    /// Returns a mutable reference to the child nodes or `None` if this is a leaf node.
+    fn children_nodes_mut(&mut self) -> Option<&mut [Option<NodePtr<M>>; M]> {
+        match &mut self.children {
+            Children::Nodes(nodes) => Some(nodes),
+            Children::Data(_) => None,
+        }
+    }
+
+    /// Returns a mutable reference to the data entries or `None` if this is an inner node.
+    fn children_data_mut(&mut self) -> Option<&mut [Option<Box<u32>>; M]> {
+        match &mut self.children {
+            Children::Nodes(_) => None,
+            Children::Data(data) => Some(data),
+        }
     }
 
     /// Returns a pointer to the first child node or `None` if not present.
     fn first_child_node(&self) -> Option<NodePtr<M>> {
-        self.map_child_node(0, |c| c)
+        self.children.map_nodeptr(0, |c| c)
     }
 
     /// Returns a child node as an immutable reference.
     fn child_node_as_ref(&self, i: usize) -> Option<&Node<M>> {
         // SAFETY: A child is always a valid pointer or `None`.
-        self.map_child_node(i, |c| unsafe { c.as_ref() })
-    }
-
-    /// Returns a child node as a mutable reference.
-    fn child_node_as_mut(&mut self, i: usize) -> Option<&mut Node<M>> {
-        // SAFETY: A child is always a valid pointer or `None`.
-        self.map_child_node(i, |mut c| unsafe { c.as_mut() })
+        self.children.map_nodeptr(i, |c| unsafe { c.as_ref() })
     }
 
     /// Returns true if this node is a leaf node.
     fn is_leaf(&self) -> bool {
-        self.map_child_node(0, |_| ()).is_none()
+        self.first_child_node().is_none()
     }
 
     /// The number of keys in this node.
@@ -233,11 +263,15 @@ impl<const M: usize> Node<M> {
     /// Returns the right-most node that got shifted out.
     ///
     /// The caller must ensure that the returned `ChildNode` is freed.
-    fn shift_right_from(&mut self, from: usize) -> Option<Child<M>> {
-        let right_most = self.children[M - 1].take();
+    fn shift_right_from<T>(
+        keys: &mut [Option<Key>; M],
+        children: &mut [Option<T>; M],
+        from: usize,
+    ) -> Option<T> {
+        let right_most = children[M - 1].take();
         for i in (from..M - 1).rev() {
-            self.children[i + 1] = self.children[i].take();
-            self.keys[i + 1] = self.keys[i].take();
+            children[i + 1] = children[i].take();
+            keys[i + 1] = keys[i].take();
         }
         right_most
     }
@@ -254,18 +288,20 @@ impl<const M: usize> Node<M> {
             KeyPosition::Found => return InsertResult::AlreadyPresent,
             KeyPosition::InChild(i) => i,
         };
-        if self.is_leaf() {
-            // No need to keep the returned node because leaves have no children.
-            self.shift_right_from(key_pos);
-            self.keys[key_pos] = Some(key);
-            self.children[key_pos] = Some(Child::Data(Box::new(value)));
-            if self.num_keys() == M {
-                return InsertResult::Overfull(None);
+        let nodes = match &mut self.children {
+            Children::Data(data) => {
+                Node::<M>::shift_right_from(&mut self.keys, data, key_pos);
+                self.keys[key_pos] = Some(key);
+                data[key_pos] = Some(Box::new(value));
+                if self.num_keys() == M {
+                    return InsertResult::Overfull(None);
+                }
+                return InsertResult::Inserted;
             }
-            return InsertResult::Inserted;
-        }
+            Children::Nodes(nodes) => nodes,
+        };
         // Not a leaf. Insert recursively.
-        let child_spillover_node = match self.child_node_as_mut(key_pos).unwrap().insert(key, value)
+        let spillover_content = match unsafe { nodes[key_pos].unwrap().as_mut().insert(key, value) }
         {
             r @ InsertResult::Inserted | r @ InsertResult::AlreadyPresent => return r,
             InsertResult::Overfull(n) => n,
@@ -273,23 +309,19 @@ impl<const M: usize> Node<M> {
 
         // Overfull. Need to split the child node.
         // SAFETY: Both provided nodes are valid.
-        let (new_left_child, pulled_up_key, new_right_child) = unsafe {
-            split_insert(
-                self.children[key_pos].take().unwrap().unwrap_node(),
-                child_spillover_node,
-            )
-        };
+        let (new_left_child, pulled_up_key, new_right_child) =
+            unsafe { split_insert(nodes[key_pos].take().unwrap(), spillover_content) };
 
-        let spillover_node = self.shift_right_from(key_pos);
-        self.children[key_pos] = Some(Child::Node(new_left_child));
+        let spillover_node = Node::<M>::shift_right_from(&mut self.keys, nodes, key_pos);
+        nodes[key_pos] = Some(new_left_child);
         self.keys[key_pos] = Some(pulled_up_key);
 
         // The spillover node is either what we just shifted out or the new right child.
         let spillover_node = if key_pos < M - 1 {
-            self.children[key_pos + 1] = Some(Child::Node(new_right_child));
+            nodes[key_pos + 1] = Some(new_right_child);
             spillover_node
         } else {
-            Some(Child::Node(new_right_child))
+            Some(new_right_child)
         };
 
         if self.num_keys() == M {
@@ -351,14 +383,14 @@ impl<const M: usize> Drop for BTree<M> {
 
 impl<const M: usize> Drop for Node<M> {
     fn drop(&mut self) {
-        for c in self.children.iter().flatten() {
-            match c {
-                Child::Node(node) => {
+        match self.children {
+            Children::Nodes(nodes) => {
+                for c in nodes.iter().flatten() {
                     // SAFETY: The pointer comes originally from a Box.
-                    unsafe { Box::from_raw(node.as_ptr()) };
+                    unsafe { Box::from_raw(c.as_ptr()) };
                 }
-                Child::Data(_) => (),
             }
+            Children::Data(_) => (),
         }
     }
 }
@@ -373,7 +405,7 @@ impl<const M: usize> BTree<M> {
     /// Returns a new empty BTree.
     pub fn new() -> BTree<M> {
         BTree {
-            root: new_child_node(),
+            root: new_leaf_node(),
         }
     }
 
@@ -401,13 +433,14 @@ impl<const M: usize> BTree<M> {
             InsertResult::Overfull(node) => node,
         };
         // Split the root and put both parts under a new root.
-        let old_root = std::mem::replace(&mut self.root, new_child_node());
+        let old_root = std::mem::replace(&mut self.root, new_inner_node());
         // SAFETY: Both provided nodes are valid.
         let (new_left_child, pulled_up_key, new_right_child) =
             unsafe { split_insert(old_root, spillover_node) };
         let r = self.root_as_mut();
-        r.children[0] = Some(Child::Node(new_left_child));
+        let nodes = r.children_nodes_mut().unwrap();
+        nodes[0] = Some(new_left_child);
+        nodes[1] = Some(new_right_child);
         r.keys[0] = Some(pulled_up_key);
-        r.children[1] = Some(Child::Node(new_right_child));
     }
 }

@@ -1,15 +1,37 @@
-use super::{split_insert, BTree, Key, Node};
+use super::{split_insert, BTree, Children, Key, Node, Value};
 use rand::rngs::StdRng;
 use rand::{prelude::SliceRandom, SeedableRng};
 use std::ptr::NonNull;
+
+fn new_array<F, T, const M: usize>(f: F) -> [T; M]
+where
+    F: Fn(u32) -> T,
+{
+    let mut i: u32 = 0;
+    [(); M].map(|_| {
+        let t = f(i);
+        i += 1;
+        t
+    })
+}
+
+unsafe fn data_from_node<const M: usize>(node: &Node<M>) -> [Option<Value>; M] {
+    new_array(|i| {
+        match &node.children {
+            Children::Nodes(_) => None,
+            Children::Data(data) => data[usize::try_from(i).unwrap()].as_ref(),
+        }
+        .map(|x| **x)
+    })
+}
 
 #[test]
 fn test_split_insert_leaf_odd() {
     unsafe {
         let dummy_ptr = Some(NonNull::dangling());
         let node = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<5> {
-            keys: [Some(0), Some(1), Some(2), Some(3), Some(4)],
-            children: [None, None, None, None, None],
+            keys: new_array(Some),
+            children: Children::Data(new_array(|i| Some(Box::new(i)))),
             next_in_layer: dummy_ptr,
         })));
         let (left, key, right) = split_insert(node, None);
@@ -37,24 +59,34 @@ fn test_split_insert_leaf_even() {
     unsafe {
         let dummy_ptr = Some(NonNull::dangling());
         let node = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<4> {
-            keys: [Some(0), Some(1), Some(2), Some(3)],
-            children: [None, None, None, None],
+            keys: new_array(Some),
+            children: Children::Data(new_array(|i| Some(Box::new(i)))),
             next_in_layer: dummy_ptr,
         })));
         let (left, key, right) = split_insert(node, None);
+
         // split_insert should reuse the provided node.
         assert_eq!(left, node);
         assert_eq!(
             left.as_ref().keys.to_vec(),
             vec![Some(0), Some(1), None, None]
         );
+        assert_eq!(
+            data_from_node(left.as_ref()),
+            [Some(0), Some(1), None, None]
+        );
         assert_eq!(key, 1);
         assert_eq!(
             right.as_ref().keys.to_vec(),
             vec![Some(2), Some(3), None, None]
         );
+        assert_eq!(
+            data_from_node(right.as_ref()),
+            [Some(2), Some(3), None, None]
+        );
         assert_eq!(left.as_ref().next_in_layer, Some(right));
         assert_eq!(right.as_ref().next_in_layer, dummy_ptr);
+
         Box::from_raw(left.as_ptr());
         Box::from_raw(right.as_ptr());
     }
