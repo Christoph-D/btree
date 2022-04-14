@@ -29,14 +29,13 @@ unsafe fn data_from_node<Value: Copy, const M: usize>(node: &Node<Value, M>) -> 
 fn test_split_insert_leaf_odd() {
     unsafe {
         let dummy_ptr = Some(NonNull::dangling());
-        let node = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<u32, 5> {
+        let mut left = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<u32, 5> {
             keys: new_array(Some),
             children: Children::Data(new_array(|i| Some(Box::new(i)))),
             next_in_layer: dummy_ptr,
         })));
-        let (left, key, right) = split_insert(node, None);
-        // split_insert should reuse the provided node.
-        assert_eq!(left, node);
+        let (key, right) = split_insert(left.as_mut(), None);
+
         assert_eq!(
             left.as_ref().keys.to_vec(),
             vec![Some(0), Some(1), Some(2), None, None]
@@ -58,15 +57,13 @@ fn test_split_insert_leaf_odd() {
 fn test_split_insert_leaf_even() {
     unsafe {
         let dummy_ptr = Some(NonNull::dangling());
-        let node = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<u32, 4> {
+        let mut left = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<u32, 4> {
             keys: new_array(Some),
             children: Children::Data(new_array(|i| Some(Box::new(i)))),
             next_in_layer: dummy_ptr,
         })));
-        let (left, key, right) = split_insert(node, None);
+        let (key, right) = split_insert(left.as_mut(), None);
 
-        // split_insert should reuse the provided node.
-        assert_eq!(left, node);
         assert_eq!(
             left.as_ref().keys.to_vec(),
             vec![Some(0), Some(1), None, None]
