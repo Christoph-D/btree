@@ -1,4 +1,4 @@
-use super::{split_insert, BTree, Children, Key, Node, Value};
+use super::{split_insert, BTree, Children, Key, Node};
 use rand::rngs::StdRng;
 use rand::{prelude::SliceRandom, SeedableRng};
 use std::ptr::NonNull;
@@ -15,7 +15,7 @@ where
     })
 }
 
-unsafe fn data_from_node<const M: usize>(node: &Node<M>) -> [Option<Value>; M] {
+unsafe fn data_from_node<Value: Copy, const M: usize>(node: &Node<Value, M>) -> [Option<Value>; M] {
     new_array(|i| {
         match &node.children {
             Children::Nodes(_) => None,
@@ -29,7 +29,7 @@ unsafe fn data_from_node<const M: usize>(node: &Node<M>) -> [Option<Value>; M] {
 fn test_split_insert_leaf_odd() {
     unsafe {
         let dummy_ptr = Some(NonNull::dangling());
-        let node = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<5> {
+        let node = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<u32, 5> {
             keys: new_array(Some),
             children: Children::Data(new_array(|i| Some(Box::new(i)))),
             next_in_layer: dummy_ptr,
@@ -58,7 +58,7 @@ fn test_split_insert_leaf_odd() {
 fn test_split_insert_leaf_even() {
     unsafe {
         let dummy_ptr = Some(NonNull::dangling());
-        let node = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<4> {
+        let node = NonNull::new_unchecked(Box::into_raw(Box::new(Node::<u32, 4> {
             keys: new_array(Some),
             children: Children::Data(new_array(|i| Some(Box::new(i)))),
             next_in_layer: dummy_ptr,
@@ -94,7 +94,7 @@ fn test_split_insert_leaf_even() {
 
 #[test]
 fn test_simple() {
-    let mut tree = BTree::<3>::new();
+    let mut tree = BTree::<u32, 3>::new();
     assert!(tree.root_as_ref().is_leaf());
     tree.insert(1, 5);
     tree.insert(2, 6);
@@ -112,7 +112,7 @@ fn test_simple() {
 
 #[test]
 fn test_insert() {
-    let mut tree = BTree::<3>::new();
+    let mut tree = BTree::<u32, 3>::new();
     let mut vec: Vec<u32> = (0..100).collect();
     vec.shuffle(&mut StdRng::from_seed([0; 32]));
     for i in vec {
@@ -130,7 +130,7 @@ fn test_insert() {
 
 #[test]
 fn test_big() {
-    let mut tree = BTree::<10>::new();
+    let mut tree = BTree::<u32, 10>::new();
     let mut vec: Vec<u32> = (0..200).collect();
     vec.shuffle(&mut StdRng::from_seed([0; 32]));
     for i in vec {
