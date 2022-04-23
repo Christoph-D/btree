@@ -1,4 +1,4 @@
-use super::{split_insert, BTree, Key, LeafNode};
+use super::{drop_node, split_insert, BTree, Key, LeafNode};
 use rand::rngs::StdRng;
 use rand::{prelude::SliceRandom, SeedableRng};
 use std::mem::MaybeUninit;
@@ -41,9 +41,10 @@ fn test_split_insert_leaf_odd() {
         assert_eq!(right.as_ref().keys().collect::<Vec<u32>>(), vec![3, 4]);
         assert_eq!(left.as_ref().as_leaf_node().next_in_layer, Some(right));
         assert_eq!(right.as_ref().as_leaf_node().next_in_layer, dummy_ptr);
+
         // Avoid memory leak in tests.
-        Box::from_raw(left.as_ptr() as *mut LeafNode<u32, 5>);
-        Box::from_raw(right.as_ptr() as *mut LeafNode<u32, 5>);
+        drop_node(0, left);
+        drop_node(0, right);
     }
 }
 
@@ -71,8 +72,9 @@ fn test_split_insert_leaf_even() {
         assert_eq!(left_leaf.next_in_layer, Some(right));
         assert_eq!(right_leaf.next_in_layer, dummy_ptr);
 
-        Box::from_raw(left.as_ptr() as *mut LeafNode<u32, 4>);
-        Box::from_raw(right.as_ptr() as *mut LeafNode<u32, 4>);
+        // Avoid memory leak in tests.
+        drop_node(0, left);
+        drop_node(0, right);
     }
 }
 
