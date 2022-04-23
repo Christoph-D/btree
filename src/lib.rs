@@ -107,13 +107,11 @@ enum InsertResult<Value, const M: usize> {
 }
 
 fn new_leaf_node<Value, const M: usize>() -> NodePtr<Value, M> {
-    // SAFETY: A pointer from a Box is never null.
-    unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Node::new_leaf()))) }
+    NonNull::from(Box::leak(Box::new(Node::new_leaf())))
 }
 
 fn new_inner_node<Value, const M: usize>() -> NodePtr<Value, M> {
-    // SAFETY: A pointer from a Box is never null.
-    unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(Node::new_inner()))) }
+    NonNull::from(Box::leak(Box::new(Node::new_inner())))
 }
 
 /// Split a node into two, inserting the right-most node that didn't previously fit.
@@ -150,8 +148,7 @@ fn split_insert<Value, const M: usize>(
 
     // Fix the intra-layer pointers.
     right.next_in_layer = left.next_in_layer;
-    // SAFETY: A pointer from a Box is never null.
-    let new_right_ptr = unsafe { NonNull::new_unchecked(Box::into_raw(right)) };
+    let new_right_ptr = NonNull::from(Box::leak(right));
     left.next_in_layer = Some(new_right_ptr);
 
     (pulled_up_key, new_right_ptr)
@@ -334,6 +331,7 @@ impl<Value, const M: usize> Drop for Node<Value, M> {
         match self.children {
             Children::Nodes(nodes) => {
                 for c in nodes.iter().flatten() {
+                    // SAFETY: The pointer comes originally from a Box.
                     unsafe { Box::from_raw(c.as_ptr()) };
                 }
             }
