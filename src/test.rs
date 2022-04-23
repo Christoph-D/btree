@@ -19,7 +19,7 @@ where
 unsafe fn data_from_node<Value: Copy, const M: usize>(node: &LeafNode<Value, M>) -> Vec<Value> {
     node.data[0..node.num_keys]
         .iter()
-        .map(|x| **x.assume_init_ref())
+        .map(|x| *x.assume_init_ref())
         .collect()
 }
 
@@ -30,7 +30,7 @@ fn test_split_insert_leaf_odd() {
         let mut left = LeafNode::<u32, 5> {
             num_keys: 5,
             keys: new_array(MaybeUninit::new),
-            data: new_array(|i| MaybeUninit::new(Box::new(i))),
+            data: new_array(|i| MaybeUninit::new(i)),
             next_in_layer: dummy_ptr,
         }
         .leak_from_box();
@@ -55,7 +55,7 @@ fn test_split_insert_leaf_even() {
         let mut left = LeafNode::<u32, 4> {
             keys: new_array(MaybeUninit::new),
             num_keys: 4,
-            data: new_array(|i| MaybeUninit::new(Box::new(i))),
+            data: new_array(|i| MaybeUninit::new(i)),
             next_in_layer: dummy_ptr,
         }
         .leak_from_box();

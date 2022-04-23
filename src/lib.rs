@@ -32,7 +32,7 @@ struct InnerOrLeafNode<Value, const M: usize> {
     // The number of keys.
     num_keys: usize,
 
-    _data_marker: PhantomData<Box<Value>>,
+    _data_marker: PhantomData<Value>,
 }
 
 /// An inner node in a [BTree]. Prefix layout-compatible with [LeafNode].
@@ -52,7 +52,7 @@ struct InnerNode<Value, const M: usize> {
     ///   That is, iterating over the leaf nodes yields all keys.
     children: [MaybeUninit<NodePtr<Value, M>>; M],
 
-    _data_marker: PhantomData<Box<Value>>,
+    _data_marker: PhantomData<Value>,
 }
 
 /// A leaf node in a [BTree]. Prefix layout-compatible with [InnerNode].
@@ -66,7 +66,7 @@ struct LeafNode<Value, const M: usize> {
     // The number of keys.
     num_keys: usize,
     /// The data in this node. `key[i]` maps to `data[i]`.
-    data: [MaybeUninit<Box<Value>>; M],
+    data: [MaybeUninit<Value>; M],
     /// The next node in this layer of the tree.
     /// This is `None` for the right-most node in the layer.
     /// Useful for iterating over the leaf nodes.
@@ -317,7 +317,7 @@ impl<Value, const M: usize> InnerOrLeafNode<Value, M> {
             KeyPosition::InChild(i) => i,
         };
         if Self::is_leaf(height) {
-            insert_at(&mut self.as_leaf_node_mut().data, key_pos, Box::new(value));
+            insert_at(&mut self.as_leaf_node_mut().data, key_pos, value);
             insert_at(&mut self.keys, key_pos, key);
             self.num_keys += 1;
             if self.num_keys == M {
