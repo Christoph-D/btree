@@ -424,13 +424,18 @@ impl<K, V, const M: usize> Drop for BTree<K, V, M> {
 }
 
 unsafe fn drop_node<K, V, const M: usize>(height: usize, mut node: NodePtr<K, V, M>) {
+    // Drop the node's keys.
+    let node_mut = node.as_mut();
+    for k in &mut node_mut.keys[0..node_mut.num_keys] {
+        k.assume_init_drop();
+    }
     if height == 0 {
         // Drop this leaf node's data.
         let leaf_node = node.as_mut().as_leaf_node_mut();
         for d in &mut leaf_node.data[0..leaf_node.num_keys] {
             d.assume_init_drop();
         }
-        // Drop the leaf, casting it to the correct type.
+        // Drop the node itself, casting it to the correct type.
         Box::from_raw(node.as_ptr() as *mut LeafNode<K, V, M>);
     } else {
         // Drop this inner node's children.
@@ -438,7 +443,7 @@ unsafe fn drop_node<K, V, const M: usize>(height: usize, mut node: NodePtr<K, V,
         for c in &inner_node.children[0..inner_node.num_keys + 1] {
             drop_node(height - 1, c.assume_init());
         }
-        // Drop the inner node, casting it to the correct type.
+        // Drop the node itself, casting it to the correct type.
         Box::from_raw(node.as_ptr() as *mut InnerNode<K, V, M>);
     }
 }
