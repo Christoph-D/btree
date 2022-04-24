@@ -1,4 +1,5 @@
 use array::{insert_at, move_upper_half};
+use std::borrow::Borrow;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::{self, MaybeUninit};
@@ -289,14 +290,15 @@ impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
 
     /// Locates the given key in this node (not subtree).
     /// For a non-existent key, it returns the InChild value indicating where the key should be inserted.
-    fn key_position(&self, key: &K) -> KeyPosition
+    fn key_position<Q>(&self, key: &Q) -> KeyPosition
     where
-        K: Ord,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
     {
         for (i, k) in self.keys().enumerate() {
             match k {
-                k if k > key => return KeyPosition::InChild(i),
-                k if k == key => return KeyPosition::Found(i),
+                k if k.borrow() > key => return KeyPosition::InChild(i),
+                k if k.borrow() == key => return KeyPosition::Found(i),
                 _ => {}
             }
         }
@@ -304,9 +306,10 @@ impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
     }
 
     /// Returns true if the key is in the subtree starting from this node.
-    fn contains_key(&self, height: usize, key: &K) -> bool
+    fn contains_key<Q>(&self, height: usize, key: &Q) -> bool
     where
-        K: Ord,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
     {
         match self.key_position(key) {
             KeyPosition::Found(_) => true,
@@ -326,9 +329,10 @@ impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
     }
 
     /// Returns a reference to the value mapped to the given key or `None` if not present.
-    fn get(&self, height: usize, key: &K) -> Option<&V>
+    fn get<Q>(&self, height: usize, key: &Q) -> Option<&V>
     where
-        K: Ord,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
     {
         if Self::is_leaf(height) {
             let leaf_node = unsafe { self.as_leaf_node() };
@@ -493,17 +497,19 @@ impl<K, V, const M: usize> BTree<K, V, M> {
     }
 
     /// Returns true if the key is in the tree.
-    pub fn contains_key(&self, key: &K) -> bool
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        K: Ord,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
     {
         self.root_as_ref().contains_key(self.height, key)
     }
 
     /// Returns a reference to the value mapped to the given key or `None` if not present.
-    pub fn get(&self, key: &K) -> Option<&V>
+    pub fn get<Q>(&self, key: &Q) -> Option<&V>
     where
-        K: Ord,
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
     {
         self.root_as_ref().get(self.height, key)
     }

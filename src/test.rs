@@ -126,6 +126,19 @@ fn test_simple_even() {
 }
 
 #[test]
+fn test_string_keys() {
+    let mut tree = BTree::<String, u32, 4>::new();
+    tree.insert("five".to_owned(), 5);
+    tree.insert("six".to_owned(), 6);
+    tree.insert("seven".to_owned(), 7);
+    tree.insert("four".to_owned(), 9);
+    assert!(tree.contains_key("six"));
+    assert!(!tree.contains_key("twenty"));
+    assert_eq!(tree.get("six").copied(), Some(6));
+    assert_eq!(tree.get("twenty").copied(), None);
+}
+
+#[test]
 fn test_insert() {
     let mut tree = BTree::<Key, u32, 3>::new();
     let mut vec: Vec<u32> = (0..100).collect();
