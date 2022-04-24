@@ -286,7 +286,7 @@ impl<Value, const M: usize> InnerOrLeafNode<Value, M> {
     }
 
     /// Returns true if the key is in the subtree starting from this node.
-    fn lookup(&self, height: usize, key: &Key) -> bool {
+    fn contains_key(&self, height: usize, key: &Key) -> bool {
         match self.key_position(key) {
             KeyPosition::Found => true,
             KeyPosition::InChild(i) => {
@@ -298,7 +298,7 @@ impl<Value, const M: usize> InnerOrLeafNode<Value, M> {
                     inner_node.children[i]
                         .assume_init()
                         .as_ref()
-                        .lookup(height - 1, key)
+                        .contains_key(height - 1, key)
                 }
             }
         }
@@ -438,8 +438,8 @@ impl<Value, const M: usize> BTree<Value, M> {
     }
 
     /// Returns true if the key is in the tree.
-    pub fn lookup(&self, key: &Key) -> bool {
-        self.root_as_ref().lookup(self.height, key)
+    pub fn contains_key(&self, key: &Key) -> bool {
+        self.root_as_ref().contains_key(self.height, key)
     }
 
     /// Inserts the key into the tree.

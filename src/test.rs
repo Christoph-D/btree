@@ -120,10 +120,10 @@ fn test_insert() {
         tree.insert(i, i + 1);
     }
     for i in 0..100 {
-        assert!(tree.lookup(&i), "Not found: {}", i);
+        assert!(tree.contains_key(&i), "Not found: {}", i);
     }
     for i in 100..110 {
-        assert!(!tree.lookup(&i), "Found: {}", i);
+        assert!(!tree.contains_key(&i), "Found: {}", i);
     }
     let r = tree.into_iter().collect::<Vec<Key>>();
     assert_eq!(r, (0..100).collect::<Vec<Key>>());
@@ -138,7 +138,7 @@ fn test_big() {
         tree.insert(i, i + 1);
     }
     for i in 0..200 {
-        assert!(tree.lookup(&i), "Not found: {}", i);
+        assert!(tree.contains_key(&i), "Not found: {}", i);
     }
     let r = tree.into_iter().collect::<Vec<Key>>();
     assert_eq!(r, (0..200).collect::<Vec<Key>>());
