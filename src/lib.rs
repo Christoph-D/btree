@@ -1,7 +1,7 @@
 use array::{insert_at, move_upper_half};
 use std::fmt;
 use std::marker::PhantomData;
-use std::mem::MaybeUninit;
+use std::mem::{self, MaybeUninit};
 use std::ptr::NonNull;
 
 mod array;
@@ -11,24 +11,23 @@ mod test;
 
 /// A B+ tree implementation.
 #[derive(Debug)]
-pub struct BTree<V, const M: usize> {
-    root: NodePtr<V, M>,
+pub struct BTree<K, V, const M: usize> {
+    root: NodePtr<K, V, M>,
     /// The number of layers in this tree minus 1.
     /// An empty tree consisting only of a root node has height 0.
     height: usize,
 }
 
-type Key = u32;
-type NodePtr<V, const M: usize> = NonNull<InnerOrLeafNode<V, M>>;
+type NodePtr<K, V, const M: usize> = NonNull<InnerOrLeafNode<K, V, M>>;
 
 /// An inner or leaf node node in a [BTree]. Layout-compatible with [InnerNode] and [LeafNode].
 #[derive(Debug)]
 #[repr(C)]
-struct InnerOrLeafNode<V, const M: usize> {
+struct InnerOrLeafNode<K, V, const M: usize> {
     /// The number of keys is always the number of children - 1.
     /// Temporarily during modifications a node can be overfull and
     /// contain `M` keys and `M` children, see [InsertResult::Overfull].
-    keys: [MaybeUninit<Key>; M],
+    keys: [MaybeUninit<K>; M],
     // The number of keys.
     num_keys: usize,
 
@@ -38,11 +37,11 @@ struct InnerOrLeafNode<V, const M: usize> {
 /// An inner node in a [BTree]. Prefix layout-compatible with [LeafNode].
 #[derive(Debug)]
 #[repr(C)]
-struct InnerNode<V, const M: usize> {
+struct InnerNode<K, V, const M: usize> {
     /// The number of keys is always the number of children - 1.
     /// Temporarily during modifications a node can be overfull and
     /// contain `M` keys and `M` children, see [InsertResult::Overfull].
-    keys: [MaybeUninit<Key>; M],
+    keys: [MaybeUninit<K>; M],
     // The number of keys.
     num_keys: usize,
     /// The children below this node. Invariants:
@@ -50,7 +49,7 @@ struct InnerNode<V, const M: usize> {
     /// * `keys[i]` is smaller than all keys in `children[i+1]`.
     /// * All keys are copied into the leaf nodes.
     ///   That is, iterating over the leaf nodes yields all keys.
-    children: [MaybeUninit<NodePtr<V, M>>; M],
+    children: [MaybeUninit<NodePtr<K, V, M>>; M],
 
     _data_marker: PhantomData<V>,
 }
@@ -58,11 +57,11 @@ struct InnerNode<V, const M: usize> {
 /// A leaf node in a [BTree]. Prefix layout-compatible with [InnerNode].
 #[derive(Debug)]
 #[repr(C)]
-struct LeafNode<V, const M: usize> {
+struct LeafNode<K, V, const M: usize> {
     /// The number of keys is always the number of children - 1.
     /// Temporarily during modifications a node can be overfull and
     /// contain `M` keys and `M` children, see [InsertResult::Overfull].
-    keys: [MaybeUninit<Key>; M],
+    keys: [MaybeUninit<K>; M],
     // The number of keys.
     num_keys: usize,
     /// The data in this node. `key[i]` maps to `data[i]`.
@@ -70,10 +69,13 @@ struct LeafNode<V, const M: usize> {
     /// The next node in this layer of the tree.
     /// This is `None` for the right-most node in the layer.
     /// Useful for iterating over the leaf nodes.
-    next_in_layer: Option<NodePtr<V, M>>,
+    next_in_layer: Option<NodePtr<K, V, M>>,
 }
 
-impl<V, const M: usize> InnerOrLeafNode<V, M> {
+impl<K, V, const M: usize> InnerOrLeafNode<K, V, M>
+where
+    K: std::fmt::Display,
+{
     // SAFETY: The provided height must be correct.
     // Specifically, self must be a leaf if and only if height is zero.
     unsafe fn format_with_indent(
@@ -82,10 +84,10 @@ impl<V, const M: usize> InnerOrLeafNode<V, M> {
         indent: usize,
         f: &mut fmt::Formatter,
     ) -> fmt::Result {
-        if InnerOrLeafNode::<V, M>::is_leaf(height) {
+        if InnerOrLeafNode::<K, V, M>::is_leaf(height) {
             let keys = self
                 .keys()
-                .map(|k| k.to_string())
+                .map(|k| format!("{}", k))
                 .collect::<Vec<String>>()
                 .join(", ");
             return writeln!(f, "{:indent$}[{keys}]", "", indent = indent, keys = keys);
@@ -100,7 +102,7 @@ impl<V, const M: usize> InnerOrLeafNode<V, M> {
                     "{:indent$}{key}",
                     "",
                     indent = indent,
-                    key = self.keys[i].assume_init()
+                    key = self.keys[i].assume_init_ref()
                 )?
             }
         }
@@ -108,7 +110,10 @@ impl<V, const M: usize> InnerOrLeafNode<V, M> {
     }
 }
 
-impl<V, const M: usize> fmt::Display for BTree<V, M> {
+impl<K, V, const M: usize> fmt::Display for BTree<K, V, M>
+where
+    K: std::fmt::Display,
+{
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         unsafe { self.root_as_ref().format_with_indent(self.height, 0, f) }
     }
@@ -122,12 +127,12 @@ enum KeyPosition {
 }
 
 #[derive(Debug)]
-enum InsertResult<V, const M: usize> {
+enum InsertResult<K, V, const M: usize> {
     Inserted,
     /// `Overfull` indicates to the caller that the node needs to be split because it is overfull.
     /// An overfull node has `M` keys (one too many) and `M` children, which is one too few for `M` keys.
     /// The right-most child that didn't fit is carried in this enum.
-    Overfull(Option<NodePtr<V, M>>),
+    Overfull(Option<NodePtr<K, V, M>>),
     AlreadyPresent,
 }
 
@@ -136,25 +141,29 @@ enum InsertResult<V, const M: usize> {
 /// Returns the newly constructed pair `(key, right node)`.
 /// Reuses the provided `node` as the new left node to keep the previous leaf's `next_in_layer` pointer intact.
 /// `item_to_insert_right` must be `None` if and if only if the node is a leaf.
-unsafe fn split_insert<V, const M: usize>(
-    left: &mut InnerOrLeafNode<V, M>,
-    item_to_insert_right: Option<NodePtr<V, M>>,
-) -> (Key, NodePtr<V, M>) {
+unsafe fn split_insert<K, V, const M: usize>(
+    left: &mut InnerOrLeafNode<K, V, M>,
+    item_to_insert_right: Option<NodePtr<K, V, M>>,
+) -> (K, NodePtr<K, V, M>)
+where
+    K: Clone,
+{
     match item_to_insert_right {
         None => leaf_split_insert(left.as_leaf_node_mut()),
         Some(item) => inner_split_insert(left.as_inner_node_mut(), item),
     }
 }
 
-unsafe fn inner_split_insert<V, const M: usize>(
-    left: &mut InnerNode<V, M>,
-    item_to_insert_right: NodePtr<V, M>,
-) -> (Key, NodePtr<V, M>) {
+unsafe fn inner_split_insert<K, V, const M: usize>(
+    left: &mut InnerNode<K, V, M>,
+    item_to_insert_right: NodePtr<K, V, M>,
+) -> (K, NodePtr<K, V, M>) {
     // Create a new sibling and move half of the children to it.
     let mut right = Box::new(InnerNode::new());
     move_upper_half(&mut left.children, &mut right.children);
     right.children[M / 2].write(item_to_insert_right);
-    let pulled_up_key = left.keys[(M - 1) / 2].assume_init();
+    let pulled_up_key =
+        mem::replace(&mut left.keys[(M - 1) / 2], MaybeUninit::uninit()).assume_init();
 
     // Move half of the keys to the new node.
     move_upper_half(&mut left.keys, &mut right.keys);
@@ -164,12 +173,17 @@ unsafe fn inner_split_insert<V, const M: usize>(
     (pulled_up_key, right.leak_from_box())
 }
 
-unsafe fn leaf_split_insert<V, const M: usize>(left: &mut LeafNode<V, M>) -> (Key, NodePtr<V, M>) {
+unsafe fn leaf_split_insert<K, V, const M: usize>(
+    left: &mut LeafNode<K, V, M>,
+) -> (K, NodePtr<K, V, M>)
+where
+    K: Clone,
+{
     // Create a new sibling and move half of the children to it.
     let mut right = Box::new(LeafNode::new());
     move_upper_half(&mut left.data, &mut right.data);
     // Copy the key out of the leaf to ensure all keys are present in the leaves.
-    let pulled_up_key = left.keys[(M - 1) / 2].assume_init();
+    let pulled_up_key = left.keys[(M - 1) / 2].assume_init_ref().clone();
 
     // Move half of the keys to the new node.
     move_upper_half(&mut left.keys, &mut right.keys);
@@ -184,7 +198,7 @@ unsafe fn leaf_split_insert<V, const M: usize>(left: &mut LeafNode<V, M>) -> (Ke
     (pulled_up_key, new_right_ptr)
 }
 
-impl<V, const M: usize> LeafNode<V, M> {
+impl<K, V, const M: usize> LeafNode<K, V, M> {
     /// Constructs an empty leaf Node with no keys and no data.
     fn new() -> Self {
         Self {
@@ -196,13 +210,13 @@ impl<V, const M: usize> LeafNode<V, M> {
         }
     }
     /// Moves the node into a Box and then immediately leaks the Box into a NonNull pointer.
-    fn leak_from_box(self) -> NonNull<InnerOrLeafNode<V, M>> {
-        let n: &mut InnerOrLeafNode<V, M> = Box::leak(Box::new(self)).into();
+    fn leak_from_box(self) -> NonNull<InnerOrLeafNode<K, V, M>> {
+        let n: &mut InnerOrLeafNode<K, V, M> = Box::leak(Box::new(self)).into();
         NonNull::from(n)
     }
 }
 
-impl<V, const M: usize> InnerNode<V, M> {
+impl<K, V, const M: usize> InnerNode<K, V, M> {
     /// Constructs an empty inner Node with no keys and no children.
     fn new() -> Self {
         Self {
@@ -214,65 +228,75 @@ impl<V, const M: usize> InnerNode<V, M> {
         }
     }
     /// Moves the node into a Box and then immediately leaks the Box into a NonNull pointer.
-    fn leak_from_box(self) -> NonNull<InnerOrLeafNode<V, M>> {
-        let n: &mut InnerOrLeafNode<V, M> = Box::leak(Box::new(self)).into();
+    fn leak_from_box(self) -> NonNull<InnerOrLeafNode<K, V, M>> {
+        let n: &mut InnerOrLeafNode<K, V, M> = Box::leak(Box::new(self)).into();
         NonNull::from(n)
     }
 }
 
-impl<V, const M: usize> InnerOrLeafNode<V, M> {
+impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
     /// SAFETY: Undefined behavior if this node is not a [LeafNode].
-    unsafe fn as_leaf_node(&self) -> &LeafNode<V, M> {
-        &*(self as *const Self as *const LeafNode<V, M>)
+    #[cfg(test)]
+    unsafe fn as_leaf_node(&self) -> &LeafNode<K, V, M> {
+        &*(self as *const Self as *const LeafNode<K, V, M>)
     }
     /// SAFETY: Undefined behavior if this node is not a [LeafNode].
-    unsafe fn as_leaf_node_mut(&mut self) -> &mut LeafNode<V, M> {
-        &mut *(self as *mut Self as *mut LeafNode<V, M>)
+    unsafe fn as_leaf_node_mut(&mut self) -> &mut LeafNode<K, V, M> {
+        &mut *(self as *mut Self as *mut LeafNode<K, V, M>)
     }
     /// SAFETY: Undefined behavior if this node is not an [InnerNode].
-    unsafe fn as_inner_node(&self) -> &InnerNode<V, M> {
-        &*(self as *const Self as *const InnerNode<V, M>)
+    unsafe fn as_inner_node(&self) -> &InnerNode<K, V, M> {
+        &*(self as *const Self as *const InnerNode<K, V, M>)
     }
     /// SAFETY: Undefined behavior if this node is not an [InnerNode].
-    unsafe fn as_inner_node_mut(&mut self) -> &mut InnerNode<V, M> {
-        &mut *(self as *mut Self as *mut InnerNode<V, M>)
+    unsafe fn as_inner_node_mut(&mut self) -> &mut InnerNode<K, V, M> {
+        &mut *(self as *mut Self as *mut InnerNode<K, V, M>)
     }
 }
 
-impl<'a, V, const M: usize> From<&'a mut LeafNode<V, M>> for &'a mut InnerOrLeafNode<V, M> {
-    fn from(x: &'a mut LeafNode<V, M>) -> Self {
+impl<'a, K, V, const M: usize> From<&'a mut LeafNode<K, V, M>>
+    for &'a mut InnerOrLeafNode<K, V, M>
+{
+    fn from(x: &'a mut LeafNode<K, V, M>) -> Self {
         // SAFETY: In memory, an [InnerOrLeafNode] is a prefix of [LeafNode].
-        unsafe { &mut *(x as *mut LeafNode<V, M> as *mut InnerOrLeafNode<V, M>) }
+        unsafe { &mut *(x as *mut LeafNode<K, V, M> as *mut InnerOrLeafNode<K, V, M>) }
     }
 }
 
-impl<'a, V, const M: usize> From<&'a mut InnerNode<V, M>> for &'a mut InnerOrLeafNode<V, M> {
-    fn from(x: &'a mut InnerNode<V, M>) -> Self {
+impl<'a, K, V, const M: usize> From<&'a mut InnerNode<K, V, M>>
+    for &'a mut InnerOrLeafNode<K, V, M>
+{
+    fn from(x: &'a mut InnerNode<K, V, M>) -> Self {
         // SAFETY: In memory, an [InnerOrLeafNode] is a prefix of [InnerNode].
-        unsafe { &mut *(x as *mut InnerNode<V, M> as *mut InnerOrLeafNode<V, M>) }
+        unsafe { &mut *(x as *mut InnerNode<K, V, M> as *mut InnerOrLeafNode<K, V, M>) }
     }
 }
 
-impl<V, const M: usize> InnerOrLeafNode<V, M> {
+impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
     /// Returns true if this node is a leaf node.
     fn is_leaf(height: usize) -> bool {
         height == 0
     }
 
     /// Returns an iterator over the keys of this node.
-    fn keys(&self) -> impl Iterator<Item = Key> + '_ {
-        self.keys[0..self.num_keys]
-            .iter()
-            .map(|k| unsafe { k.assume_init() })
+    fn keys(&self) -> Box<dyn Iterator<Item = &K> + '_> {
+        Box::new(
+            self.keys[0..self.num_keys]
+                .iter()
+                .map(|k| unsafe { k.assume_init_ref() }),
+        )
     }
 
     /// Locates the given key in this node (not subtree).
     /// For a non-existent key, it returns the InChild value indicating where the key should be inserted.
-    fn key_position(&self, key: &Key) -> KeyPosition {
+    fn key_position(&self, key: &K) -> KeyPosition
+    where
+        K: Ord,
+    {
         for (i, k) in self.keys().enumerate() {
             match k {
-                k if k > *key => return KeyPosition::InChild(i),
-                k if k == *key => return KeyPosition::Found,
+                k if k > key => return KeyPosition::InChild(i),
+                k if k == key => return KeyPosition::Found,
                 _ => {}
             }
         }
@@ -280,7 +304,10 @@ impl<V, const M: usize> InnerOrLeafNode<V, M> {
     }
 
     /// Returns true if the key is in the subtree starting from this node.
-    fn contains_key(&self, height: usize, key: &Key) -> bool {
+    fn contains_key(&self, height: usize, key: &K) -> bool
+    where
+        K: Ord,
+    {
         match self.key_position(key) {
             KeyPosition::Found => true,
             KeyPosition::InChild(i) => {
@@ -304,7 +331,10 @@ impl<V, const M: usize> InnerOrLeafNode<V, M> {
     /// additional right-most child in the returned enum.
     ///
     /// The caller must ensure that the returned node in `InsertResult::Overfull` is freed.
-    unsafe fn insert(&mut self, height: usize, key: Key, value: V) -> InsertResult<V, M> {
+    unsafe fn insert(&mut self, height: usize, key: K, value: V) -> InsertResult<K, V, M>
+    where
+        K: Ord + Clone,
+    {
         // Find out where to insert the new key.
         let key_pos = match self.key_position(&key) {
             KeyPosition::Found => return InsertResult::AlreadyPresent,
@@ -342,16 +372,16 @@ impl<V, const M: usize> InnerOrLeafNode<V, M> {
     }
 }
 
-pub struct IntoIter<V, const M: usize> {
-    _tree: BTree<V, M>,
-    leaf_node: NodePtr<V, M>,
+pub struct IntoIter<K, V, const M: usize> {
+    _tree: BTree<K, V, M>,
+    leaf_node: NodePtr<K, V, M>,
     key_index: usize,
 }
 
-impl<V, const M: usize> std::iter::IntoIterator for BTree<V, M> {
-    type Item = Key;
-    type IntoIter = IntoIter<V, M>;
-    fn into_iter(self) -> IntoIter<V, M> {
+impl<K, V, const M: usize> std::iter::IntoIterator for BTree<K, V, M> {
+    type Item = K;
+    type IntoIter = IntoIter<K, V, M>;
+    fn into_iter(self) -> IntoIter<K, V, M> {
         let mut node = self.root;
         for _ in 0..self.height {
             let inner_node = unsafe { node.as_ref().as_inner_node() };
@@ -365,13 +395,16 @@ impl<V, const M: usize> std::iter::IntoIterator for BTree<V, M> {
     }
 }
 
-impl<V, const M: usize> Iterator for IntoIter<V, M> {
-    type Item = Key;
+impl<K, V, const M: usize> Iterator for IntoIter<K, V, M> {
+    type Item = K;
     fn next(&mut self) -> Option<Self::Item> {
         // SAFETY: self._tree keeps the tree alive including all nodes.
-        let leaf_node = unsafe { self.leaf_node.as_ref().as_leaf_node() };
+        let leaf_node = unsafe { self.leaf_node.as_mut().as_leaf_node_mut() };
         if self.key_index < leaf_node.num_keys {
-            let key = unsafe { leaf_node.keys[self.key_index].assume_init() };
+            let key = unsafe {
+                mem::replace(&mut leaf_node.keys[self.key_index], MaybeUninit::uninit())
+                    .assume_init()
+            };
             self.key_index += 1;
             return Some(key);
         }
@@ -384,13 +417,13 @@ impl<V, const M: usize> Iterator for IntoIter<V, M> {
     }
 }
 
-impl<V, const M: usize> Drop for BTree<V, M> {
+impl<K, V, const M: usize> Drop for BTree<K, V, M> {
     fn drop(&mut self) {
         unsafe { drop_node(self.height, self.root) };
     }
 }
 
-unsafe fn drop_node<V, const M: usize>(height: usize, mut node: NodePtr<V, M>) {
+unsafe fn drop_node<K, V, const M: usize>(height: usize, mut node: NodePtr<K, V, M>) {
     if height == 0 {
         // Drop this leaf node's data.
         let leaf_node = node.as_mut().as_leaf_node_mut();
@@ -398,7 +431,7 @@ unsafe fn drop_node<V, const M: usize>(height: usize, mut node: NodePtr<V, M>) {
             d.assume_init_drop();
         }
         // Drop the leaf, casting it to the correct type.
-        Box::from_raw(node.as_ptr() as *mut LeafNode<V, M>);
+        Box::from_raw(node.as_ptr() as *mut LeafNode<K, V, M>);
     } else {
         // Drop this inner node's children.
         let inner_node = node.as_ref().as_inner_node();
@@ -406,19 +439,19 @@ unsafe fn drop_node<V, const M: usize>(height: usize, mut node: NodePtr<V, M>) {
             drop_node(height - 1, c.assume_init());
         }
         // Drop the inner node, casting it to the correct type.
-        Box::from_raw(node.as_ptr() as *mut InnerNode<V, M>);
+        Box::from_raw(node.as_ptr() as *mut InnerNode<K, V, M>);
     }
 }
 
-impl<V, const M: usize> Default for BTree<V, M> {
+impl<K, V, const M: usize> Default for BTree<K, V, M> {
     fn default() -> Self {
         BTree::new()
     }
 }
 
-impl<V, const M: usize> BTree<V, M> {
+impl<K, V, const M: usize> BTree<K, V, M> {
     /// Returns a new empty BTree.
-    pub fn new() -> BTree<V, M> {
+    pub fn new() -> BTree<K, V, M> {
         BTree {
             root: LeafNode::new().leak_from_box(),
             height: 0,
@@ -426,18 +459,24 @@ impl<V, const M: usize> BTree<V, M> {
     }
 
     /// Returns an immutable reference to the root node.
-    fn root_as_ref(&self) -> &InnerOrLeafNode<V, M> {
+    fn root_as_ref(&self) -> &InnerOrLeafNode<K, V, M> {
         // SAFETY: The root is always a valid pointer.
         unsafe { self.root.as_ref() }
     }
 
     /// Returns true if the key is in the tree.
-    pub fn contains_key(&self, key: &Key) -> bool {
+    pub fn contains_key(&self, key: &K) -> bool
+    where
+        K: Ord,
+    {
         self.root_as_ref().contains_key(self.height, key)
     }
 
     /// Inserts the key into the tree.
-    pub fn insert(&mut self, key: Key, value: V) {
+    pub fn insert(&mut self, key: K, value: V)
+    where
+        K: Clone + Ord,
+    {
         unsafe {
             let height = self.height;
             let spillover_node = match self.root.as_mut().insert(height, key, value) {
