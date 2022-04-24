@@ -16,7 +16,7 @@ where
     })
 }
 
-unsafe fn data_from_node<Value: Copy, const M: usize>(node: &LeafNode<Value, M>) -> Vec<Value> {
+unsafe fn data_from_node<V: Copy, const M: usize>(node: &LeafNode<V, M>) -> Vec<V> {
     node.data[0..node.num_keys]
         .iter()
         .map(|x| *x.assume_init_ref())
