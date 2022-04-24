@@ -306,7 +306,8 @@ impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
     }
 
     /// Returns true if the key is in the subtree starting from this node.
-    fn contains_key<Q>(&self, height: usize, key: &Q) -> bool
+    /// SAFETY: The provided height must be correct.
+    unsafe fn contains_key<Q>(&self, height: usize, key: &Q) -> bool
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
@@ -317,38 +318,33 @@ impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
                 if Self::is_leaf(height) {
                     return false;
                 }
-                unsafe {
-                    let inner_node = self.as_inner_node();
-                    inner_node.children[i]
-                        .assume_init()
-                        .as_ref()
-                        .contains_key(height - 1, key)
-                }
+                self.as_inner_node().children[i]
+                    .assume_init()
+                    .as_ref()
+                    .contains_key(height - 1, key)
             }
         }
     }
 
     /// Returns a reference to the value mapped to the given key or `None` if not present.
-    fn get<Q>(&self, height: usize, key: &Q) -> Option<&V>
+    /// SAFETY: The provided height must be correct.
+    unsafe fn get<Q>(&self, height: usize, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
         if Self::is_leaf(height) {
-            let leaf_node = unsafe { self.as_leaf_node() };
+            let leaf_node = self.as_leaf_node();
             return match self.key_position(key) {
-                KeyPosition::Found(i) => unsafe { Some(leaf_node.data[i].assume_init_ref()) },
+                KeyPosition::Found(i) => Some(leaf_node.data[i].assume_init_ref()),
                 KeyPosition::InChild(_) => None,
             };
         }
         match self.key_position(key) {
-            KeyPosition::Found(i) | KeyPosition::InChild(i) => unsafe {
-                let inner_node = self.as_inner_node();
-                inner_node.children[i]
-                    .assume_init()
-                    .as_ref()
-                    .get(height - 1, key)
-            },
+            KeyPosition::Found(i) | KeyPosition::InChild(i) => self.as_inner_node().children[i]
+                .assume_init()
+                .as_ref()
+                .get(height - 1, key),
         }
     }
 
@@ -358,6 +354,7 @@ impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
     /// additional right-most child in the returned enum.
     ///
     /// The caller must ensure that the returned node in `InsertResult::Overfull` is freed.
+    /// SAFETY: The provided height must be correct.
     unsafe fn insert(&mut self, height: usize, key: K, value: V) -> InsertResult<K, V, M>
     where
         K: Ord + Clone,
@@ -502,7 +499,8 @@ impl<K, V, const M: usize> BTree<K, V, M> {
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        self.root_as_ref().contains_key(self.height, key)
+        // SAFETY: self.height is the correct height of the root node.
+        unsafe { self.root_as_ref().contains_key(self.height, key) }
     }
 
     /// Returns a reference to the value mapped to the given key or `None` if not present.
@@ -511,7 +509,8 @@ impl<K, V, const M: usize> BTree<K, V, M> {
         K: Borrow<Q>,
         Q: Ord + ?Sized,
     {
-        self.root_as_ref().get(self.height, key)
+        // SAFETY: self.height is the correct height of the root node.
+        unsafe { self.root_as_ref().get(self.height, key) }
     }
 
     /// Inserts the key into the tree.
