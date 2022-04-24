@@ -93,7 +93,7 @@ where
                 .join(", ");
             return writeln!(f, "{:indent$}[{keys}]", "", indent = indent, keys = keys);
         }
-        let inner_node = self.as_inner_node();
+        let inner_node = self.as_inner_node_unchecked();
         for i in 0..self.num_keys + 1 {
             let child = inner_node.children[i].assume_init().as_ref();
             child.format_with_indent(height - 1, indent + 2, f)?;
@@ -151,8 +151,8 @@ where
     K: Clone,
 {
     match item_to_insert_right {
-        None => leaf_split_insert(left.as_leaf_node_mut()),
-        Some(item) => inner_split_insert(left.as_inner_node_mut(), item),
+        None => leaf_split_insert(left.as_leaf_node_mut_unchecked()),
+        Some(item) => inner_split_insert(left.as_inner_node_mut_unchecked(), item),
     }
 }
 
@@ -238,19 +238,19 @@ impl<K, V, const M: usize> InnerNode<K, V, M> {
 
 impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
     /// SAFETY: Undefined behavior if this node is not a [LeafNode].
-    unsafe fn as_leaf_node(&self) -> &LeafNode<K, V, M> {
+    unsafe fn as_leaf_node_unchecked(&self) -> &LeafNode<K, V, M> {
         &*(self as *const Self as *const LeafNode<K, V, M>)
     }
     /// SAFETY: Undefined behavior if this node is not a [LeafNode].
-    unsafe fn as_leaf_node_mut(&mut self) -> &mut LeafNode<K, V, M> {
+    unsafe fn as_leaf_node_mut_unchecked(&mut self) -> &mut LeafNode<K, V, M> {
         &mut *(self as *mut Self as *mut LeafNode<K, V, M>)
     }
     /// SAFETY: Undefined behavior if this node is not an [InnerNode].
-    unsafe fn as_inner_node(&self) -> &InnerNode<K, V, M> {
+    unsafe fn as_inner_node_unchecked(&self) -> &InnerNode<K, V, M> {
         &*(self as *const Self as *const InnerNode<K, V, M>)
     }
     /// SAFETY: Undefined behavior if this node is not an [InnerNode].
-    unsafe fn as_inner_node_mut(&mut self) -> &mut InnerNode<K, V, M> {
+    unsafe fn as_inner_node_mut_unchecked(&mut self) -> &mut InnerNode<K, V, M> {
         &mut *(self as *mut Self as *mut InnerNode<K, V, M>)
     }
 }
@@ -318,7 +318,7 @@ impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
                 if Self::is_leaf(height) {
                     return false;
                 }
-                self.as_inner_node().children[i]
+                self.as_inner_node_unchecked().children[i]
                     .assume_init()
                     .as_ref()
                     .contains_key(height - 1, key)
@@ -334,17 +334,19 @@ impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
         Q: Ord + ?Sized,
     {
         if Self::is_leaf(height) {
-            let leaf_node = self.as_leaf_node();
+            let leaf_node = self.as_leaf_node_unchecked();
             return match self.key_position(key) {
                 KeyPosition::Found(i) => Some(leaf_node.data[i].assume_init_ref()),
                 KeyPosition::InChild(_) => None,
             };
         }
         match self.key_position(key) {
-            KeyPosition::Found(i) | KeyPosition::InChild(i) => self.as_inner_node().children[i]
-                .assume_init()
-                .as_ref()
-                .get(height - 1, key),
+            KeyPosition::Found(i) | KeyPosition::InChild(i) => {
+                self.as_inner_node_unchecked().children[i]
+                    .assume_init()
+                    .as_ref()
+                    .get(height - 1, key)
+            }
         }
     }
 
@@ -365,7 +367,7 @@ impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
             KeyPosition::InChild(i) => i,
         };
         if Self::is_leaf(height) {
-            insert_at(&mut self.as_leaf_node_mut().data, key_pos, value);
+            insert_at(&mut self.as_leaf_node_mut_unchecked().data, key_pos, value);
             insert_at(&mut self.keys, key_pos, key);
             self.num_keys += 1;
             if self.num_keys == M {
@@ -374,7 +376,7 @@ impl<K, V, const M: usize> InnerOrLeafNode<K, V, M> {
             return InsertResult::Inserted;
         }
         // Not a leaf. Insert recursively.
-        let inner_node = self.as_inner_node_mut();
+        let inner_node = self.as_inner_node_mut_unchecked();
         // SAFETY: An inner node always has a child to the right of each key.
         let left_child = inner_node.children[key_pos].assume_init().as_mut();
         let spillover_content = match left_child.insert(height - 1, key, value) {
@@ -408,7 +410,7 @@ impl<K, V, const M: usize> std::iter::IntoIterator for BTree<K, V, M> {
     fn into_iter(self) -> IntoIter<K, V, M> {
         let mut node = self.root;
         for _ in 0..self.height {
-            let inner_node = unsafe { node.as_ref().as_inner_node() };
+            let inner_node = unsafe { node.as_ref().as_inner_node_unchecked() };
             node = unsafe { inner_node.children[0].assume_init() };
         }
         IntoIter {
@@ -423,7 +425,7 @@ impl<K, V, const M: usize> Iterator for IntoIter<K, V, M> {
     type Item = K;
     fn next(&mut self) -> Option<Self::Item> {
         // SAFETY: self._tree keeps the tree alive including all nodes.
-        let leaf_node = unsafe { self.leaf_node.as_mut().as_leaf_node_mut() };
+        let leaf_node = unsafe { self.leaf_node.as_mut().as_leaf_node_mut_unchecked() };
         if self.key_index < leaf_node.num_keys {
             let key = unsafe {
                 mem::replace(&mut leaf_node.keys[self.key_index], MaybeUninit::uninit())
@@ -455,7 +457,7 @@ unsafe fn drop_node<K, V, const M: usize>(height: usize, mut node: NodePtr<K, V,
     }
     if height == 0 {
         // Drop this leaf node's data.
-        let leaf_node = node.as_mut().as_leaf_node_mut();
+        let leaf_node = node.as_mut().as_leaf_node_mut_unchecked();
         for d in &mut leaf_node.data[0..leaf_node.num_keys] {
             d.assume_init_drop();
         }
@@ -463,7 +465,7 @@ unsafe fn drop_node<K, V, const M: usize>(height: usize, mut node: NodePtr<K, V,
         Box::from_raw(node.as_ptr() as *mut LeafNode<K, V, M>);
     } else {
         // Drop this inner node's children.
-        let inner_node = node.as_ref().as_inner_node();
+        let inner_node = node.as_ref().as_inner_node_unchecked();
         for c in &inner_node.children[0..inner_node.num_keys + 1] {
             drop_node(height - 1, c.assume_init());
         }
@@ -527,7 +529,7 @@ impl<K, V, const M: usize> BTree<K, V, M> {
             // Split the root and put both parts under a new root.
             let (pulled_up_key, new_right_child) = split_insert(self.root.as_mut(), spillover_node);
             let old_root = std::mem::replace(&mut self.root, InnerNode::new().leak_from_box());
-            let r = self.root.as_mut().as_inner_node_mut();
+            let r = self.root.as_mut().as_inner_node_mut_unchecked();
             r.children[0].write(old_root);
             r.children[1].write(new_right_child);
             r.keys[0].write(pulled_up_key);
