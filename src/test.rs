@@ -135,9 +135,11 @@ fn test_insert() {
     }
     for i in 0..100 {
         assert!(tree.contains_key(&i), "Not found: {}", i);
+        assert_eq!(tree.get(&i).copied(), Some(i + 1), "Not found: {}", i);
     }
     for i in 100..110 {
         assert!(!tree.contains_key(&i), "Found: {}", i);
+        assert_eq!(tree.get(&i), None, "Found: {}", i);
     }
     let r = tree.into_iter().collect::<Vec<Key>>();
     assert_eq!(r, (0..100).collect::<Vec<Key>>());
@@ -153,6 +155,7 @@ fn test_big() {
     }
     for i in 0..200 {
         assert!(tree.contains_key(&i), "Not found: {}", i);
+        assert_eq!(tree.get(&i).copied(), Some(i + 1), "Not found: {}", i);
     }
     let r = tree.into_iter().collect::<Vec<Key>>();
     assert_eq!(r, (0..200).collect::<Vec<Key>>());
