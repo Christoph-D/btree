@@ -47,14 +47,8 @@ fn test_split_insert_leaf_odd() {
             right.as_ref().keys().copied().collect::<Vec<Key>>(),
             vec![3, 4]
         );
-        assert_eq!(
-            left.as_ref().as_leaf_node_unchecked().next_in_layer,
-            Some(right)
-        );
-        assert_eq!(
-            right.as_ref().as_leaf_node_unchecked().next_in_layer,
-            dummy_ptr
-        );
+        assert_eq!(left.as_ref().leaf.next_in_layer, Some(right));
+        assert_eq!(right.as_ref().leaf.next_in_layer, dummy_ptr);
 
         // Avoid memory leak in tests.
         drop_node(0, left);
@@ -75,8 +69,8 @@ fn test_split_insert_leaf_even() {
         .leak_from_box();
         let (key, right) = split_insert(left.as_mut(), None);
 
-        let left_leaf = left.as_ref().as_leaf_node_unchecked();
-        let right_leaf = right.as_ref().as_leaf_node_unchecked();
+        let left_leaf = &left.as_ref().leaf;
+        let right_leaf = &right.as_ref().leaf;
 
         assert_eq!(
             left.as_ref().keys().copied().collect::<Vec<Key>>(),
