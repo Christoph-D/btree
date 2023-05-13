@@ -467,7 +467,7 @@ unsafe fn drop_node<K, V, const M: usize>(height: usize, mut node: NodePtr<K, V,
             drop_node(height - 1, c.assume_init());
         }
     }
-    Box::from_raw(node.as_ptr());
+    drop(Box::from_raw(node.as_ptr()));
 }
 
 impl<K, V, const M: usize> Default for BTree<K, V, M> {
